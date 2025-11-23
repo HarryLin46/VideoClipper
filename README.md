@@ -49,6 +49,7 @@ VideoClipper/
 │   └── sample.marks
 │
 └── README.md
+```
 
 🗂 The .marks File Format
 
@@ -105,3 +106,4 @@ clips/
   clip_001.mp4
   clip_002.mp4
   ...
+```
