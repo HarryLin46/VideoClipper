@@ -33,7 +33,8 @@ Adjusts boundaries to proper aligned frames
 Outputs multiple clean video segments using ffmpeg
 
 
-📦 Project Structure (Draft)
+📦 Project Structure
+```text
 VideoClipper/
 │
 ├── background_marker/
@@ -99,6 +100,7 @@ python generate_clips.py \
 
 Output files as:
 
+```text
 clips/
   clip_001.mp4
   clip_002.mp4
