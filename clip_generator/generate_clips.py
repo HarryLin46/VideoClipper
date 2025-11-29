@@ -21,8 +21,7 @@ import subprocess
 import sys
 from typing import List, Dict, Any, Tuple, Optional
 
-from . import alignment
-
+from clip_generator import alignment
 
 VIDEO_EXT_WHITELIST = {".mp4", ".ts", ".mkv", ".mov", ".avi", ".flv", ".m4v"}
 
