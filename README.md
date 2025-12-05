@@ -57,9 +57,6 @@ VideoClipper/clip_generator/gui_app.exe
 ## Usage Workflow
 
 VideoClipper follows a simple two-step process:  
-mark segments while watching, then load and export through the GUI.
-
----
 
 ### Step 1. Start the background marker
 
@@ -108,6 +105,16 @@ Contents:
 
 ### Step 3. Load and export clips in the GUI
 
+Make sure the video file and its `.marks` file are located in the same folder.
+
+Then run:
+
+```
+VideoClipper/clip_generator/gui_app.exe
+```
+
+### Step 3. Load and export clips in the GUI
+
 Before opening the GUI, make sure the video file and its `.marks` file are located in the same folder.
 
 Run:
@@ -117,6 +124,8 @@ VideoClipper/clip_generator/gui_app.exe
 ```
 
 In the GUI:
+
+![VideoClipper GUI](./README_img/gui.png)
 
 - Click **Select Video File…** and choose the video you watched.  
 - The GUI automatically loads the matching `.marks` file.  
@@ -128,6 +137,7 @@ In the GUI:
   - ±1s and ±0.1s buttons for precise adjustments  
 
 If you do not wish to adjust anything, you may export directly.
+
 
 #### Output Location
 
