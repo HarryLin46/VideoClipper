@@ -148,7 +148,7 @@ All exported clips are placed **in the same folder as the video and its `.marks`
 - The background marker only records timestamps when PotPlayer is the foreground window.  
 - The video file and its `.marks` file **must** be in the same folder before loading in the GUI.  
 - Segment marking has **no undo function**; each middle-mouse press is permanently recorded.  
-- Nested segments (a clip inside another clip) are **not supported**; all segments are treated as a linear list.
+- Nested segments (a clip inside another clip) are **not supported**.
 
 ---
 
