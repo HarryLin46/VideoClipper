@@ -9,7 +9,7 @@ It streamlines the workflow of watching → marking → exporting without interr
 
 VideoClipper consists of two main components:
 
-### background_marker.exe
+### 1. background_marker.exe
 
 When PotPlayer is the active window, pressing the middle mouse button records the current playback timestamp.  
 The timestamps are saved into a `.marks` file located in:
@@ -32,7 +32,7 @@ A `.marks` file looks like this:
 
 Each pair of lines represents one clip segment.
 
-### gui_app.exe
+### 2. gui_app.exe
 
 After watching the video, you open the GUI to load the video file and its `.marks` file.  
 The GUI displays all detected segments, allows optional fine adjustments using sliders and buttons, and finally exports all clips at once.
