@@ -127,13 +127,13 @@ In the GUI:
 
 ![VideoClipper GUI](./README_img/gui.png)
 
-- Click **Select Video File…** and choose the video you watched.  
-- The GUI automatically loads the matching `.marks` file.  
-- All segments (Clip #1, Clip #2, …) appear in the left sidebar.  
+- Click **"選擇影片檔案..."** and choose the video you watched.  
+- After processing, all segments (Clip #1, Clip #2, …) will appear in the left sidebar.  
 - You may fine-tune each segment using:
+  - Click **"目前正在調整: 開始點" / "目前正在調整: 結束點"** to select which point to adjust.
   - Green slider: start position  
   - Red slider: end position  
-  - Blue slider: preview seek  
+  - Blue slider: seek within the preview  
   - ±1s and ±0.1s buttons for precise adjustments  
 
 If you do not wish to adjust anything, you may export directly.
