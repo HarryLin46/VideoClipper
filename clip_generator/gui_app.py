@@ -86,6 +86,9 @@ FINE_DELTA_SECONDS = 0.1     # 小步微調：0.1 秒
 
 END_PREVIEW_OFFSET_SECONDS = 3.0  # 調整結束點時，播放從 end 前幾秒開始
 
+# Start 與 End 之間的最小距離（秒）
+MIN_GAP_SECONDS = 1.0
+
 
 class VideoClipperWindow(QMainWindow):
     def __init__(self) -> None:
@@ -100,6 +103,7 @@ class VideoClipperWindow(QMainWindow):
         self.segments: List[ClipSegment] = []
         self.current_index: int = -1  # 目前選中的 clip index (0-based)
         self.active_target: str = "start"  # "start" 或 "end"
+        self.is_busy: bool = False     # 是否正在進行長時間作業（讀取/對齊/輸出）
 
         self.video_duration_ms: int = 0  # 影片總長度（毫秒）
         # 目前這個 clip 的顯示/調整視窗（秒）
@@ -161,6 +165,12 @@ class VideoClipperWindow(QMainWindow):
         middle_layout.addLayout(left_panel, stretch=1)
 
         left_panel.addWidget(QLabel("Clip 列表"))
+
+        # 狀態提示 Label（顯示「讀取中 / 輸出中」等訊息）
+        self.clip_status_label = QLabel("")
+        self.clip_status_label.setStyleSheet("color: gray;")
+        left_panel.addWidget(self.clip_status_label)
+
         self.clip_list = QListWidget()
         self.clip_list.itemSelectionChanged.connect(self.on_clip_selection_changed)
         left_panel.addWidget(self.clip_list, stretch=1)
@@ -183,7 +193,7 @@ class VideoClipperWindow(QMainWindow):
         self.lbl_end_title = QLabel("結束點")
         self.lbl_playback_title = QLabel("播放位置")
         for lbl in (self.lbl_start_title, self.lbl_end_title, self.lbl_playback_title):
-            lbl.setFixedWidth(60)  # 需要可以自己調整
+            lbl.setFixedWidth(60)
             lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
         # 統一右側時間 Label 寬度，只顯示時間字串
@@ -191,7 +201,7 @@ class VideoClipperWindow(QMainWindow):
         self.lbl_end = QLabel("--:--")
         self.lbl_playback = QLabel("--:--")
         for lbl in (self.lbl_start, self.lbl_end, self.lbl_playback):
-            lbl.setFixedWidth(70)  # 尾巴欄位固定寬度，三條滑桿尾端對齊
+            lbl.setFixedWidth(70)
             lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
         # 開始點 slider（綠）
@@ -233,7 +243,6 @@ class VideoClipperWindow(QMainWindow):
         playback_row.addWidget(self.lbl_playback)
         tl_layout.addLayout(playback_row)
 
-
         right_panel.addWidget(timeline_box)
 
         # 控制區：播放 + 微調 + 模式切換
@@ -241,11 +250,16 @@ class VideoClipperWindow(QMainWindow):
         controls_layout = QVBoxLayout()
         controls_box.setLayout(controls_layout)
 
-        # 播放 / 暫停
+        # 播放 / 暫停 + 接續播放
         play_layout = QHBoxLayout()
         self.btn_play = QPushButton("播放 / 暫停")
         self.btn_play.clicked.connect(self.on_play_pause_clicked)
+
+        self.btn_resume = QPushButton("接續播放 / 暫停")
+        self.btn_resume.clicked.connect(self.on_resume_play_clicked)
+
         play_layout.addWidget(self.btn_play)
+        play_layout.addWidget(self.btn_resume)
         play_layout.addStretch()
         controls_layout.addLayout(play_layout)
 
@@ -300,14 +314,30 @@ class VideoClipperWindow(QMainWindow):
         bottom_layout.addStretch()
         bottom_layout.addWidget(self.btn_export)
 
+    # ======== Busy 狀態控制 ========
+
+    def _enter_busy(self, message: str) -> None:
+        """進入長時間作業狀態：停用所有互動，顯示提示文字。"""
+        self.is_busy = True
+        self._stop_playback()
+        self._set_clip_controls_enabled(False)
+        self.btn_open.setEnabled(False)
+        self.playback_slider.setEnabled(False)
+        self.clip_status_label.setText(message)
+        QApplication.processEvents()
+
+    def _leave_busy(self) -> None:
+        """離開長時間作業狀態：恢復可互動，清除提示文字。"""
+        self.is_busy = False
+        self.btn_open.setEnabled(True)
+        self.clip_status_label.setText("")
+
     # ======== enable / disable ========
 
     def _set_clip_controls_enabled(self, enabled: bool) -> None:
         self.clip_list.setEnabled(enabled)
-        self.start_slider.setEnabled(enabled)
-        self.end_slider.setEnabled(enabled)
-        # playback_slider 由播放狀態控制啟用/鎖定
         self.btn_play.setEnabled(enabled)
+        self.btn_resume.setEnabled(enabled)
         self.btn_minus_coarse.setEnabled(enabled)
         self.btn_plus_coarse.setEnabled(enabled)
         self.btn_minus_fine.setEnabled(enabled)
@@ -316,6 +346,15 @@ class VideoClipperWindow(QMainWindow):
         self.btn_next.setEnabled(enabled)
         self.btn_export.setEnabled(enabled)
         self.btn_active_target.setEnabled(enabled)
+
+        if not enabled:
+            # 關閉整體控制時，兩個邊界滑桿一律鎖住
+            self.start_slider.setEnabled(False)
+            self.end_slider.setEnabled(False)
+        else:
+            # 開啟整體控制時，由 active_target 決定哪一個邊界可以動
+            self._update_active_target_ui()
+
 
     # ======== 播放開始/停止 helper ========
 
@@ -327,6 +366,8 @@ class VideoClipperWindow(QMainWindow):
 
     def _start_segment_playback(self) -> None:
         """依目前 active_target 與最新 start/end 設定播放區間並開始播放。"""
+        if self.is_busy:
+            return
         if not self.segments or self.current_index < 0:
             return
         seg = self.segments[self.current_index]
@@ -343,12 +384,34 @@ class VideoClipperWindow(QMainWindow):
         self.media_player.play()
         self.playback_timer.start()
         self.playback_slider.setEnabled(True)
-        # 播放起點時更新藍色滑桿
         self._update_playback_slider_from_time(play_start)
+
+    def _resume_segment_playback_from_current(self) -> None:
+        """從目前播放位置接續播放，仍遵守 start/end 邊界。"""
+        if self.is_busy:
+            return
+        if not self.segments or self.current_index < 0:
+            return
+
+        seg = self.segments[self.current_index]
+        current_sec = self.media_player.position() / 1000.0
+
+        if current_sec < seg.start_sec or current_sec > seg.end_sec:
+            current_sec = seg.start_sec
+
+        self.playback_end_sec = seg.end_sec
+        self._seek_to_sec(current_sec)
+        self.media_player.play()
+        self.playback_timer.start()
+        self.playback_slider.setEnabled(True)
+        self._update_playback_slider_from_time(current_sec)
 
     # ======== 開啟影片 + 載入 clips ========
 
     def on_open_video(self) -> None:
+        if self.is_busy:
+            return
+
         dlg = QFileDialog(self, "選擇影片檔案")
         dlg.setFileMode(QFileDialog.ExistingFile)
         dlg.setNameFilter(
@@ -364,6 +427,7 @@ class VideoClipperWindow(QMainWindow):
         video_path = files[0]
         base, _ext = os.path.splitext(video_path)
         marks_path = base + ".marks"
+        print(marks_path)
 
         if not os.path.exists(marks_path):
             QMessageBox.critical(
@@ -374,10 +438,14 @@ class VideoClipperWindow(QMainWindow):
             )
             return
 
-        # 讀取 clips
+        self._enter_busy("正在讀取 .marks 並進行對齊，請稍候，完成前請勿操作其他按鈕。")
+
         try:
-            segments = load_segments_from_marks(video_path, marks_path, align_mode="keyframe")
+            segments = load_segments_from_marks(
+                video_path, marks_path, align_mode="none"
+            )
         except Exception as e:
+            self._leave_busy()
             QMessageBox.critical(
                 self,
                 "讀取 .marks 失敗",
@@ -386,6 +454,7 @@ class VideoClipperWindow(QMainWindow):
             return
 
         if not segments:
+            self._leave_busy()
             QMessageBox.warning(self, "沒有 clips", "這個 .marks 沒有任何可用片段。")
             return
 
@@ -396,20 +465,19 @@ class VideoClipperWindow(QMainWindow):
         self.active_target = "start"
         self._update_active_target_ui()
 
-        # 載入影片
         self.media_player.setSource(QUrl.fromLocalFile(self.video_path))
         self.media_player.pause()
 
-        # 建立 clip list
         self._populate_clip_list()
 
-        # 啟用控制
+        self.current_index = 0
+        self.clip_list.setCurrentRow(0)
+        self._update_ui_for_current_clip()
+
         self._set_clip_controls_enabled(True)
         self.playback_slider.setEnabled(False)
 
-        # 選中第一個 clip
-        self.clip_list.setCurrentRow(0)
-        self._update_ui_for_current_clip()
+        self._leave_busy()
 
     def _populate_clip_list(self) -> None:
         self.clip_list.clear()
@@ -421,6 +489,8 @@ class VideoClipperWindow(QMainWindow):
     # ======== Clip 切換 ========
 
     def on_clip_selection_changed(self) -> None:
+        if self.is_busy:
+            return
         row = self.clip_list.currentRow()
         if row < 0 or row >= len(self.segments):
             return
@@ -429,12 +499,16 @@ class VideoClipperWindow(QMainWindow):
         self._update_ui_for_current_clip()
 
     def on_prev_clip(self) -> None:
+        if self.is_busy:
+            return
         if not self.segments:
             return
         new_index = max(0, self.current_index - 1)
         self.clip_list.setCurrentRow(new_index)
 
     def on_next_clip(self) -> None:
+        if self.is_busy:
+            return
         if not self.segments:
             return
         new_index = min(len(self.segments) - 1, self.current_index + 1)
@@ -443,12 +517,14 @@ class VideoClipperWindow(QMainWindow):
     # ======== 模式切換 ========
 
     def on_toggle_active_target(self) -> None:
+        if self.is_busy:
+            return
         if self.active_target == "start":
             self.active_target = "end"
         else:
             self.active_target = "start"
         self._update_active_target_ui()
-        # 切換模式後，畫面跳到對應邊界
+
         if not self.segments or self.current_index < 0:
             return
         seg = self.segments[self.current_index]
@@ -475,25 +551,19 @@ class VideoClipperWindow(QMainWindow):
 
         seg = self.segments[self.current_index]
 
-        self.lbl_start.setText(f"Start: {self._fmt_time(seg.start_sec)}")
-        self.lbl_end.setText(f"End: {self._fmt_time(seg.end_sec)}")
+        self.lbl_start.setText(self._fmt_time(seg.start_sec))
+        self.lbl_end.setText(self._fmt_time(seg.end_sec))
 
-        # 只在這裡（選 clip / 影片長度更新時）依當前 start/end 決定視窗範圍
         self._recompute_window_range()
-
-        # 更新 start/end slider 位置（程式內部 setValue 必須 blockSignals）
         self._update_boundary_sliders()
 
-        # 播放位置顯示為 start（暫停狀態）
         self._update_playback_slider_from_time(seg.start_sec)
 
-        # 畫面跳到目前 active_target 的位置
         if self.active_target == "start":
             self._seek_to_sec(seg.start_sec)
         else:
             self._seek_to_sec(seg.end_sec)
 
-        # 更新左邊清單上這條的文字（防止之前有改過沒反映）
         self._refresh_clip_list_item(self.current_index)
 
     def _refresh_clip_list_item(self, index: Optional[int] = None) -> None:
@@ -511,8 +581,6 @@ class VideoClipperWindow(QMainWindow):
     # ======== 視窗範圍與滑桿映射 ========
 
     def _recompute_window_range(self) -> None:
-        """根據目前 clip 的 start/end 與影片長度，計算顯示/調整視窗範圍。
-           注意：每段 clip 僅在選取時算一次，之後不因拖拉而改變。"""
         if not self.segments or self.current_index < 0:
             self.window_start_sec = 0.0
             self.window_end_sec = 1.0
@@ -536,7 +604,6 @@ class VideoClipperWindow(QMainWindow):
         self.window_end_sec = we
 
     def _update_boundary_sliders(self) -> None:
-        """根據 window_start/window_end 與目前 start/end 設定滑桿。"""
         if self.window_end_sec <= self.window_start_sec:
             self.start_slider.blockSignals(True)
             self.end_slider.blockSignals(True)
@@ -563,28 +630,21 @@ class VideoClipperWindow(QMainWindow):
         self.end_slider.blockSignals(False)
 
     def _slider_value_to_sec(self, value: int) -> float:
-        """將 start/end 滑桿值轉換成視窗範圍中的時間（秒）。"""
         if self.window_end_sec <= self.window_start_sec:
             return self.window_start_sec
         ratio = max(0.0, min(1.0, value / SLIDER_MAX))
         return self.window_start_sec + ratio * (self.window_end_sec - self.window_start_sec)
 
-    # 播放滑桿（藍）使用 start~end 區間，而非 window 範圍
     def _playback_slider_value_to_sec(self, value: int) -> float:
-        """將播放滑桿值轉為視窗範圍(window_start~window_end)中的時間."""
         if self.window_end_sec <= self.window_start_sec:
             return self.window_start_sec
         ratio = max(0.0, min(1.0, value / SLIDER_MAX))
         return self.window_start_sec + ratio * (self.window_end_sec - self.window_start_sec)
-
 
     def _update_playback_slider_from_time(self, sec: float) -> None:
-        """依據時間（秒）更新播放滑桿位置與 label。
-        滑桿位置用 window_start~window_end 映射，確保與綠/紅一致。"""
         if self.window_end_sec <= self.window_start_sec:
             return
 
-        # 時間在視窗內 clamp，避免超出 window 導致比例錯亂
         clamped = max(self.window_start_sec, min(sec, self.window_end_sec))
         ratio = (clamped - self.window_start_sec) / (self.window_end_sec - self.window_start_sec)
         value = int(ratio * SLIDER_MAX)
@@ -593,37 +653,37 @@ class VideoClipperWindow(QMainWindow):
         self.playback_slider.setValue(value)
         self.playback_slider.blockSignals(False)
 
-        # label 顯示實際時間（sec），通常也在 start~end 之間
-        self.lbl_playback.setText(f"Playback: {self._fmt_time(sec)}")
+        self.lbl_playback.setText(self._fmt_time(sec))
 
-
-    # ======== 滑桿事件（start/end：點擊或拖曳） ========
+    # ======== 滑桿事件（start/end） ========
 
     def on_start_slider_changed(self, value: int) -> None:
-        """調整開始點：僅當 active_target 是 start 且有有效 clip 時作用。"""
+        if self.is_busy:
+            return
         if self.active_target != "start":
             return
         if not self.segments or self.current_index < 0:
             return
 
         seg = self.segments[self.current_index]
-        was_playing = (
-            self.media_player.playbackState() == QMediaPlayer.PlayingState
-        )
+        was_playing = self.media_player.playbackState() == QMediaPlayer.PlayingState
 
         new_start = self._slider_value_to_sec(value)
 
-        # clamp：不小於 0，不大於 end - 0.05
-        new_start = max(0.0, new_start)
-        new_start = min(new_start, seg.end_sec - 0.05)
+        max_start = max(0.0, seg.end_sec - MIN_GAP_SECONDS)
+        if max_start < 0.0:
+            max_start = 0.0
+        new_start = max(0.0, min(new_start, max_start))
 
         seg.start_sec = new_start
-        self.lbl_start.setText(f"Start: {self._fmt_time(seg.start_sec)}")
+        self.lbl_start.setText(self._fmt_time(seg.start_sec))
+
+        # 校正後的 start/end 重新反映到綠/紅滑桿
+        self._update_boundary_sliders()
+
         self._seek_to_sec(seg.start_sec)
         self._refresh_clip_list_item(self.current_index)
 
-        # 播放滑桿更新：播放位置仍維持目前播放時間（若正在播）或 start（若暫停）
-        # 這裡簡化成：若暫停就顯示 start；若播放，後面 positionChanged 會覆蓋更新。
         if not was_playing:
             self._update_playback_slider_from_time(seg.start_sec)
 
@@ -633,34 +693,39 @@ class VideoClipperWindow(QMainWindow):
             self._stop_playback()
 
     def on_end_slider_changed(self, value: int) -> None:
-        """調整結束點：僅當 active_target 是 end 且有有效 clip 時作用。"""
+        if self.is_busy:
+            return
         if self.active_target != "end":
             return
         if not self.segments or self.current_index < 0:
             return
 
         seg = self.segments[self.current_index]
-        was_playing = (
-            self.media_player.playbackState() == QMediaPlayer.PlayingState
-        )
+        was_playing = self.media_player.playbackState() == QMediaPlayer.PlayingState
 
         new_end = self._slider_value_to_sec(value)
 
-        # clamp：不小於 start + 0.05，不大於影片總長 / 視窗右界
+        min_end = seg.start_sec + MIN_GAP_SECONDS
+        max_end = self.window_end_sec
         if self.video_duration_ms > 0:
-            max_sec = self.video_duration_ms / 1000.0
-            new_end = min(new_end, max_sec)
-        new_end = max(new_end, seg.start_sec + 0.05)
-        new_end = min(new_end, self.window_end_sec)
+            max_end = min(max_end, self.video_duration_ms / 1000.0)
+
+        if max_end < min_end:
+            new_end = min_end
+        else:
+            new_end = max(min_end, min(new_end, max_end))
 
         seg.end_sec = new_end
-        self.lbl_end.setText(f"End: {self._fmt_time(seg.end_sec)}")
+        self.lbl_end.setText(self._fmt_time(seg.end_sec))
+
+        # 校正後的 start/end 重新反映到綠/紅滑桿
+        self._update_boundary_sliders()
+
         self._seek_to_sec(seg.end_sec)
         self._refresh_clip_list_item(self.current_index)
 
         if not was_playing:
-            # 暫停狀態下，播放滑桿顯示 start
-            self._update_playback_slider_from_time(seg.start_sec)
+            self._update_playback_slider_from_time(seg.end_sec)
 
         if was_playing:
             self._start_segment_playback()
@@ -670,10 +735,9 @@ class VideoClipperWindow(QMainWindow):
     # ======== 播放滑桿事件（藍） ========
 
     def on_playback_slider_changed(self, value: int) -> None:
-        """播放位置滑桿：僅在播放中時可拖曳，時間映射用 window，
-        但實際生效範圍限制在目前 clip 的 start~end 之間。"""
+        if self.is_busy:
+            return
         if self.media_player.playbackState() != QMediaPlayer.PlayingState:
-            # 非播放狀態時，忽略使用者互動（理論上也被 setEnabled(False) 鎖住）
             return
         if not self.segments or self.current_index < 0:
             return
@@ -682,36 +746,43 @@ class VideoClipperWindow(QMainWindow):
         if seg.end_sec <= seg.start_sec:
             return
 
-        # 先用 window 映射取得時間
         sec = self._playback_slider_value_to_sec(value)
 
-        # 若超出 start~end 範圍，視為無效操作：還原到目前播放位置
         if sec < seg.start_sec or sec > seg.end_sec:
             current_sec = self.media_player.position() / 1000.0
             self._update_playback_slider_from_time(current_sec)
             return
 
-        # 在合法範圍內才真正 seek
         self._seek_to_sec(sec)
-        self.lbl_playback.setText(f"Playback: {self._fmt_time(sec)}")
+        self.lbl_playback.setText(self._fmt_time(sec))
 
-
-    # ======== 播放 / 暫停 ========
+    # ======== 播放 / 暫停 / 接續播放 ========
 
     def on_play_pause_clicked(self) -> None:
+        if self.is_busy:
+            return
         if not self.segments or self.current_index < 0:
             return
 
-        # 如果正在播放，按一下就是暫停
         if self.media_player.playbackState() == QMediaPlayer.PlayingState:
             self._stop_playback()
             return
 
-        # 否則以目前 active_target 與最新 start/end 開始播放
         self._start_segment_playback()
 
+    def on_resume_play_clicked(self) -> None:
+        if self.is_busy:
+            return
+        if not self.segments or self.current_index < 0:
+            return
+
+        if self.media_player.playbackState() == QMediaPlayer.PlayingState:
+            self._stop_playback()
+            return
+
+        self._resume_segment_playback_from_current()
+
     def _on_playback_timer(self) -> None:
-        """檢查是否到達 playback_end_sec，若到達則停止播放。"""
         if self.playback_end_sec is None:
             return
         pos_ms = self.media_player.position()
@@ -722,79 +793,99 @@ class VideoClipperWindow(QMainWindow):
     # ======== 微調按鈕 ========
 
     def on_adjust_clicked(self, delta_seconds: float) -> None:
-        """-1秒 / +1秒 / -0.1秒 / +0.1秒 共同 handler。"""
+        if self.is_busy:
+            return
         if not self.segments or self.current_index < 0:
             return
 
         seg = self.segments[self.current_index]
-        was_playing = (
-            self.media_player.playbackState() == QMediaPlayer.PlayingState
-        )
+        was_playing = self.media_player.playbackState() == QMediaPlayer.PlayingState
 
         if self.active_target == "start":
-            # 以目前綠色滑桿位置為基準
             current = self._slider_value_to_sec(self.start_slider.value())
             new_start = current + delta_seconds
 
-            new_start = max(0.0, new_start)
-            new_start = min(new_start, seg.end_sec - 0.05)
+            max_start = max(0.0, seg.end_sec - MIN_GAP_SECONDS)
+            if max_start < 0.0:
+                max_start = 0.0
+            new_start = max(0.0, min(new_start, max_start))
 
             seg.start_sec = new_start
-            self.lbl_start.setText(f"Start: {self._fmt_time(seg.start_sec)}")
+            self.lbl_start.setText(self._fmt_time(seg.start_sec))
             self._seek_to_sec(seg.start_sec)
 
         else:
-            # active_target == "end"
             current = self._slider_value_to_sec(self.end_slider.value())
             new_end = current + delta_seconds
 
+            min_end = seg.start_sec + MIN_GAP_SECONDS
+            max_end = self.window_end_sec
             if self.video_duration_ms > 0:
-                max_sec = self.video_duration_ms / 1000.0
-                new_end = min(new_end, max_sec)
-            new_end = max(new_end, seg.start_sec + 0.05)
-            new_end = min(new_end, self.window_end_sec)
+                max_end = min(max_end, self.video_duration_ms / 1000.0)
+
+            if max_end < min_end:
+                new_end = min_end
+            else:
+                new_end = max(min_end, min(new_end, max_end))
 
             seg.end_sec = new_end
-            self.lbl_end.setText(f"End: {self._fmt_time(seg.end_sec)}")
+            self.lbl_end.setText(self._fmt_time(seg.end_sec))
             self._seek_to_sec(seg.end_sec)
 
-        # 微調後：更新綠/紅滑桿位置（視窗不再重算，因此比例保持一致）
         self._update_boundary_sliders()
         self._refresh_clip_list_item(self.current_index)
 
         if not was_playing:
-            # 暫停狀態下，播放位置顯示 start
-            self._update_playback_slider_from_time(seg.start_sec)
+            if self.active_target == "start":
+                self._update_playback_slider_from_time(seg.start_sec)
+            else:
+                self._update_playback_slider_from_time(seg.end_sec)
             self._stop_playback()
         else:
-            # 播放狀態下，依最新 start/end 重新播放
             self._start_segment_playback()
 
     # ======== 播放器事件 ========
 
     def _on_media_status_changed(self, status) -> None:
-        # 目前不特別處理 loading/error，必要時可再補
-        pass
+        """媒體狀態改變時的處理：
+        - 當媒體載入完成 (LoadedMedia) 後，把畫面與藍色滑桿拉到目前 clip 的 start。
+        """
+        from PySide6.QtMultimedia import QMediaPlayer as _QMP
+
+        if status == _QMP.LoadedMedia:
+            if self.segments and self.current_index >= 0:
+                seg = self.segments[self.current_index]
+                # 媒體真正 ready 之後，再 seek 到 start，這次會確實更新畫面
+                self._seek_to_sec(seg.start_sec)
+                self._update_playback_slider_from_time(seg.start_sec)
 
     def _on_duration_changed(self, duration_ms: int) -> None:
         self.video_duration_ms = duration_ms
-        # 影片長度改變時，若已選 clip，就重新計算一次視窗與滑桿位置
         if self.segments and self.current_index >= 0:
+            # 影片長度一出來，更新 window + 綠/紅滑桿位置
             self._recompute_window_range()
             self._update_boundary_sliders()
 
+
+
+
     def _on_position_changed(self, position_ms: int) -> None:
-        """影片播放位置變化時，更新藍色滑桿與顯示。"""
         if not self.segments or self.current_index < 0:
             return
-        seg = self.segments[self.current_index]
+
         sec = position_ms / 1000.0
-        # 播放位置顯示是真實播放時間，但藍滑桿位置被 clamp 在 start~end
-        self._update_playback_slider_from_time(sec)
+
+        # 只有在播放中才讓 positionChanged 主導藍色滑桿
+        if self.media_player.playbackState() == QMediaPlayer.PlayingState:
+            self._update_playback_slider_from_time(sec)
+
+
 
     # ======== 匯出 clips ========
 
     def on_export_clicked(self) -> None:
+        if self.is_busy:
+            return
         if not self.segments or not self.video_path:
             return
 
@@ -808,7 +899,20 @@ class VideoClipperWindow(QMainWindow):
         if ret != QMessageBox.Yes:
             return
 
-        success, fail = run_ffmpeg_for_segments(self.video_path, self.segments, out_dir)
+        self._enter_busy("正在輸出所有 clips，請稍候，完成前請勿操作其他按鈕。")
+
+        try:
+            success, fail = run_ffmpeg_for_segments(self.video_path, self.segments, out_dir)
+        except Exception as e:
+            self._leave_busy()
+            QMessageBox.critical(
+                self,
+                "輸出失敗",
+                f"輸出過程中發生錯誤：\n{e}",
+            )
+            return
+
+        self._leave_busy()
 
         QMessageBox.information(
             self,
@@ -821,7 +925,6 @@ class VideoClipperWindow(QMainWindow):
     def _fmt_time(self, sec: float) -> str:
         s = max(0.0, sec)
         total_ms = int(round(s * 1000))
-        ms = total_ms % 1000
         total_sec = total_ms // 1000
         h = total_sec // 3600
         m = (total_sec % 3600) // 60

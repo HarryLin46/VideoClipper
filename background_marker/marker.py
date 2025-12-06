@@ -285,9 +285,10 @@ def parse_args() -> argparse.Namespace:
         description="VideoClipper background marker - listen to middle mouse clicks and write .marks files."
     )
 
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(current_dir)
-    default_marks_dir = os.path.join(project_root, "VideoMarks")
+    current_dir = os.path.dirname(os.path.abspath(__file__))      # background_marker
+    project_root = os.path.dirname(current_dir)                   # VideoClipper
+    default_marks_dir = os.path.join(project_root, "VideoMarks")  # VideoClipper/VideoMarks
+
 
     os.makedirs(default_marks_dir, exist_ok=True)
 
