@@ -27,7 +27,7 @@ from typing import Optional
 from pynput import mouse
 
 from background_marker import utils
-
+import sys
 
 # 剪貼簿讀取相關時間參數（秒）
 # 第一次等 PotPlayer 寫入剪貼簿的時間
@@ -285,11 +285,19 @@ def parse_args() -> argparse.Namespace:
         description="VideoClipper background marker - listen to middle mouse clicks and write .marks files."
     )
 
-    current_dir = os.path.dirname(os.path.abspath(__file__))      # background_marker
-    project_root = os.path.dirname(current_dir)                   # VideoClipper
-    default_marks_dir = os.path.join(project_root, "VideoMarks")  # VideoClipper/VideoMarks
+    # 判斷是 .exe 模式還是正常 Python 模式
+    if getattr(sys, "frozen", False):
+        # .exe 模式：
+        # sys.executable = <ProjectRoot>/dist/run_background_marker.exe
+        dist_dir = os.path.dirname(sys.executable)        # <ProjectRoot>/dist
+        project_root = os.path.dirname(dist_dir)          # <ProjectRoot>
+    else:
+        # 開發模式（直接用 python 跑 .py）：
+        # __file__ = <ProjectRoot>/background_marker/marker.py
+        current_dir = os.path.dirname(os.path.abspath(__file__))  # background_marker
+        project_root = os.path.dirname(current_dir)               # <ProjectRoot>
 
-
+    default_marks_dir = os.path.join(project_root, "VideoMarks")  # <ProjectRoot>/VideoMarks
     os.makedirs(default_marks_dir, exist_ok=True)
 
     parser.add_argument(
@@ -305,6 +313,7 @@ def parse_args() -> argparse.Namespace:
     )
 
     return parser.parse_args()
+
 
 
 def main() -> None:
