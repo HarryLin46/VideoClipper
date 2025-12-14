@@ -12,7 +12,9 @@ from __future__ import annotations
 import dataclasses
 import os
 import subprocess
-from typing import List, Dict, Any, Tuple, Optional
+import sys
+from pathlib import Path
+from typing import List, Dict, Any, Tuple
 
 from clip_generator import alignment
 
@@ -32,6 +34,26 @@ class ClipSegment:
 
 
 # ======== 內部工具 ========
+
+def _get_ffmpeg_path() -> str:
+    """
+    策略B：僅使用專案內建 ffmpeg.exe（不依賴 PATH，不做提示偵測）
+    - 開發模式：<project_root>/bin/ffmpeg.exe
+    - PyInstaller：_MEIPASS/bin/ffmpeg.exe
+    找不到就直接 raise FileNotFoundError
+    """
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        base = Path(sys._MEIPASS)  # type: ignore[attr-defined]
+    else:
+        # core.py 位於 clip_generator/，往上一層即專案根目錄
+        base = Path(__file__).resolve().parents[1]
+
+    ffmpeg = base / "bin" / "ffmpeg.exe"
+    if not ffmpeg.exists():
+        raise FileNotFoundError(f"ffmpeg.exe not found: {ffmpeg}")
+
+    return str(ffmpeg)
+
 
 def _parse_timestamp_to_seconds(ts: str) -> float:
     """
@@ -151,9 +173,7 @@ def _parse_marks_file(path: str) -> List[Dict[str, Any]]:
     return entries
 
 
-def _build_segments_from_entries(
-    entries: List[Dict[str, Any]]
-) -> List[Dict[str, Any]]:
+def _build_segments_from_entries(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     把 entries 兩兩配對成 segments（alignment 前的原始 segments）。
 
@@ -304,6 +324,9 @@ def run_ffmpeg_for_segments(
     out_dir = os.path.abspath(out_dir)
     os.makedirs(out_dir, exist_ok=True)
 
+    # 策略B：固定使用專案內建 ffmpeg.exe
+    ffmpeg_path = _get_ffmpeg_path()
+
     _, video_ext = os.path.splitext(video_path)
     if not video_ext:
         video_ext = ".mp4"
@@ -319,7 +342,7 @@ def run_ffmpeg_for_segments(
         out_path = os.path.join(out_dir, out_name)
 
         cmd = [
-            "ffmpeg",
+            ffmpeg_path,
             "-hide_banner",
             "-loglevel",
             "error",
@@ -337,13 +360,21 @@ def run_ffmpeg_for_segments(
             out_path,
         ]
 
-        print(f"[INFO] ffmpeg cmd: {' '.join(cmd)}")
+        # 以 list 形式印出，避免含空白路徑造成誤判
+        print(f"[INFO] ffmpeg cmd (list): {cmd}")
 
-        result = subprocess.run(cmd)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+        )
+
         if result.returncode == 0:
             success += 1
         else:
             fail += 1
             print(f"[ERROR] ffmpeg failed for clip #{i}, output: {out_path}")
+            if result.stderr:
+                print(result.stderr)
 
     return success, fail
