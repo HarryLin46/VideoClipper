@@ -4,7 +4,7 @@
 a = Analysis(
     ['run_gui_app.py'],
     pathex=[],
-    binaries=[],
+    binaries=[('bin\\ffmpeg.exe', 'bin')],
     datas=[],
     hiddenimports=[],
     hookspath=[],
