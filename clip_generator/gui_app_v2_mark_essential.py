@@ -7,14 +7,8 @@
 #     pip install PySide6
 #
 # 功能摘要：
-#   - 選影片檔（同層若有對應 .marks 則載入）
-#   - 若有 .marks：
-#       * 用 core.load_segments_from_marks() 取得每段 clip 的 start/end
-#       * 每段 clip 的視窗 window_start/window_end 採 start/end ±30 秒（只在選 clip / durationChanged 時計算一次）
-#   - 若無 .marks：
-#       * 自動進入手動模式，建立第一個 clip（start=影片頭, end=影片尾）
-#       * 手動新增的 clip 使用整段影片作為視窗範圍
-#
+#   - 選影片檔（假設同一層有對應 .marks）
+#   - 用 core.load_segments_from_marks() 取得每段 clip 的 start/end
 #   - 左側：clip 列表（會即時反映調整後的 start/end）
 #   - 右側：
 #       * 影片預覽
@@ -40,10 +34,17 @@
 #           - 只在播放中啟用，可拖曳來 seek
 #           - 對應時間被限制在目前 clip 的 start~end 間
 #
-#   - 右下角「開始輸出所有 clips」：
-#       * 先詢問是否要新增一個 clip：
-#           - 若「要新增」：append 一個手動 clip（start/end 沿用目前 clip；若無任何 clip 則用頭尾），並切換到該 clip（該 clip 視窗為全長）
-#           - 若「不新增」：才進入原本輸出全部 clips 的流程
+#   - 滑桿比例重點：
+#       * 對每個 clip，window_start/window_end 只在「選 clip / 影片長度變更」時計算一次。
+#       * 之後不會因為你拖拉或微調再重算，所以同一個時間點對應的 slider 位置始終一致。
+#
+#   - 視窗範圍（每段 clip 一次性決定）：
+#       window_start = max(0, start - 30)
+#       window_end   = min(video_duration, end + 30)
+#
+#   - 播放中若拖拉或微調 start/end：
+#       * 會以最新的 start/end 重新決定播放起訖，並自動繼續播放。
+#       * 若原本是暫停狀態，則只更新畫面、不自動播放。
 
 from __future__ import annotations
 
@@ -100,18 +101,9 @@ class VideoClipperWindow(QMainWindow):
         self.video_path: Optional[str] = None
         self.marks_path: Optional[str] = None
         self.segments: List[ClipSegment] = []
-        self.manual_flags: List[bool] = []  # 與 self.segments 等長；True 表示手動新增的 clip（視窗為全長）
         self.current_index: int = -1  # 目前選中的 clip index (0-based)
         self.active_target: str = "start"  # "start" 或 "end"
         self.is_busy: bool = False     # 是否正在進行長時間作業（讀取/對齊/輸出）
-
-        self._ignore_slider_events: bool = False
-        self._last_seek_target_sec: Optional[float] = None
-        self._suppress_loadedmedia_seek: bool = False  # 防止 LoadedMedia 裡再 seek 造成遞迴
-
-
-        # 無 .marks 時，等待 duration 出來後自動建立第一個手動 clip
-        self.pending_init_first_manual_clip: bool = False
 
         self.video_duration_ms: int = 0  # 影片總長度（毫秒）
         # 目前這個 clip 的顯示/調整視窗（秒）
@@ -146,7 +138,6 @@ class VideoClipperWindow(QMainWindow):
         # 一開始 clip 相關控制都 disable
         self._set_clip_controls_enabled(False)
         self.playback_slider.setEnabled(False)
-        self.btn_resume.setEnabled(False)
 
     # ======== UI 建構 ========
 
@@ -217,31 +208,9 @@ class VideoClipperWindow(QMainWindow):
         start_row = QHBoxLayout()
         self.start_slider = QSlider(Qt.Horizontal)
         self.start_slider.setRange(0, SLIDER_MAX)
-        self.start_slider.setStyleSheet("""
-        QSlider::sub-page:horizontal:enabled {
-            background: lightgray;
-        }
-        QSlider::add-page:horizontal:enabled {
-            background: lightgray;
-        }
-        QSlider::handle:horizontal:enabled {
-            background: green;
-            width: 12px;
-        }
-
-        QSlider::sub-page:horizontal:disabled {
-            background: #d0d0d0;
-        }
-        QSlider::add-page:horizontal:disabled {
-            background: #d0d0d0;
-        }
-        QSlider::handle:horizontal:disabled {
-            background: #9e9e9e;
-        }
-        """)
-
-
-
+        self.start_slider.setStyleSheet(
+            "QSlider::handle:horizontal { background: green; width: 12px; }"
+        )
         self.start_slider.valueChanged.connect(self.on_start_slider_changed)
         start_row.addWidget(self.lbl_start_title)
         start_row.addWidget(self.start_slider, 1)
@@ -252,32 +221,9 @@ class VideoClipperWindow(QMainWindow):
         end_row = QHBoxLayout()
         self.end_slider = QSlider(Qt.Horizontal)
         self.end_slider.setRange(0, SLIDER_MAX)
-        self.end_slider.setStyleSheet("""
-        QSlider::sub-page:horizontal:enabled {
-            background: lightgray;
-        }
-        QSlider::add-page:horizontal:enabled {
-            background: lightgray;
-        }
-        QSlider::handle:horizontal:enabled {
-            background: red;
-            width: 12px;
-        }
-
-        QSlider::sub-page:horizontal:disabled {
-            background: #d0d0d0;
-        }
-        QSlider::add-page:horizontal:disabled {
-            background: #d0d0d0;
-        }
-        QSlider::handle:horizontal:disabled {
-            background: #9e9e9e;
-        }
-        """)
-
-
-
-
+        self.end_slider.setStyleSheet(
+            "QSlider::handle:horizontal { background: red; width: 12px; }"
+        )
         self.end_slider.valueChanged.connect(self.on_end_slider_changed)
         end_row.addWidget(self.lbl_end_title)
         end_row.addWidget(self.end_slider, 1)
@@ -288,11 +234,9 @@ class VideoClipperWindow(QMainWindow):
         playback_row = QHBoxLayout()
         self.playback_slider = QSlider(Qt.Horizontal)
         self.playback_slider.setRange(0, SLIDER_MAX)
-        self.playback_slider.setStyleSheet("""
-        QSlider::sub-page:horizontal { background: lightgray; }
-        QSlider::add-page:horizontal { background: lightgray; }
-        QSlider::handle:horizontal { background: blue; width: 12px; }
-        """)
+        self.playback_slider.setStyleSheet(
+            "QSlider::handle:horizontal { background: blue; width: 10px; }"
+        )
         self.playback_slider.valueChanged.connect(self.on_playback_slider_changed)
         playback_row.addWidget(self.lbl_playback_title)
         playback_row.addWidget(self.playback_slider, 1)
@@ -393,7 +337,7 @@ class VideoClipperWindow(QMainWindow):
     def _set_clip_controls_enabled(self, enabled: bool) -> None:
         self.clip_list.setEnabled(enabled)
         self.btn_play.setEnabled(enabled)
-        # self.btn_resume.setEnabled(enabled)
+        self.btn_resume.setEnabled(enabled)
         self.btn_minus_coarse.setEnabled(enabled)
         self.btn_plus_coarse.setEnabled(enabled)
         self.btn_minus_fine.setEnabled(enabled)
@@ -410,6 +354,7 @@ class VideoClipperWindow(QMainWindow):
         else:
             # 開啟整體控制時，由 active_target 決定哪一個邊界可以動
             self._update_active_target_ui()
+
 
     # ======== 播放開始/停止 helper ========
 
@@ -439,7 +384,6 @@ class VideoClipperWindow(QMainWindow):
         self.media_player.play()
         self.playback_timer.start()
         self.playback_slider.setEnabled(True)
-        self.btn_resume.setEnabled(True)
         self._update_playback_slider_from_time(play_start)
 
     def _resume_segment_playback_from_current(self) -> None:
@@ -461,7 +405,6 @@ class VideoClipperWindow(QMainWindow):
         self.playback_timer.start()
         self.playback_slider.setEnabled(True)
         self._update_playback_slider_from_time(current_sec)
-
 
     # ======== 開啟影片 + 載入 clips ========
 
@@ -486,77 +429,55 @@ class VideoClipperWindow(QMainWindow):
         marks_path = base + ".marks"
         print(marks_path)
 
-        # 清掉上一個狀態
-        self._stop_playback()
-        self.pending_init_first_manual_clip = False
-        self.video_duration_ms = 0
-        self.segments = []
-        self.manual_flags = []
-        self.current_index = -1
-        self.active_target = "start"
-        self._update_active_target_ui()
-        self._populate_clip_list()
-        self._set_clip_controls_enabled(False)
-
-        self.video_path = os.path.abspath(video_path)
-        self.marks_path = os.path.abspath(marks_path) if os.path.exists(marks_path) else None
-
-        if os.path.exists(marks_path):
-            self._enter_busy("正在讀取 .marks 並進行對齊，請稍候，完成前請勿操作其他按鈕。")
-
-            try:
-                segments = load_segments_from_marks(
-                    video_path, marks_path, align_mode="none"
-                )
-            except Exception as e:
-                self._leave_busy()
-                QMessageBox.critical(
-                    self,
-                    "讀取 .marks 失敗",
-                    f"解析 .marks 時發生錯誤：\n{e}",
-                )
-                return
-
-            if not segments:
-                # 有 marks 但沒有有效 clips：改為讓使用者仍可手動新增
-                self._leave_busy()
-                QMessageBox.information(
-                    self,
-                    "沒有 clips",
-                    "這個 .marks 沒有任何可用片段。\n將改為手動模式，你可以自行新增 clips。",
-                )
-                self.segments = []
-                self.manual_flags = []
-                self.current_index = -1
-                self.pending_init_first_manual_clip = True
-            else:
-                self.segments = segments
-                self.manual_flags = [False] * len(self.segments)
-                self.current_index = 0
-
-                self._populate_clip_list()
-                self.clip_list.setCurrentRow(0)
-
-            self.media_player.setSource(QUrl.fromLocalFile(self.video_path))
-            self.media_player.pause()
-
-            # 若已有 segments（marks），先更新 UI；若沒有，等 duration 來初始化第一個 manual clip
-            if self.segments and self.current_index >= 0:
-                self._update_ui_for_current_clip()
-                self._set_clip_controls_enabled(True)
-                self.playback_slider.setEnabled(False)
-
-            self._leave_busy()
+        if not os.path.exists(marks_path):
+            QMessageBox.critical(
+                self,
+                "找不到 .marks 檔",
+                f"在同一資料夾中找不到對應的 .marks 檔：\n{marks_path}\n\n"
+                f"請先使用 background_marker 產生標記檔。",
+            )
             return
 
-        # 無 marks：直接進入手動模式（等待 duration 再建立第一個 clip）
-        self.pending_init_first_manual_clip = True
+        self._enter_busy("正在讀取 .marks 並進行對齊，請稍候，完成前請勿操作其他按鈕。")
+
+        try:
+            segments = load_segments_from_marks(
+                video_path, marks_path, align_mode="none"
+            )
+        except Exception as e:
+            self._leave_busy()
+            QMessageBox.critical(
+                self,
+                "讀取 .marks 失敗",
+                f"解析 .marks 時發生錯誤：\n{e}",
+            )
+            return
+
+        if not segments:
+            self._leave_busy()
+            QMessageBox.warning(self, "沒有 clips", "這個 .marks 沒有任何可用片段。")
+            return
+
+        self.video_path = os.path.abspath(video_path)
+        self.marks_path = os.path.abspath(marks_path)
+        self.segments = segments
+        self.current_index = 0
+        self.active_target = "start"
+        self._update_active_target_ui()
+
         self.media_player.setSource(QUrl.fromLocalFile(self.video_path))
         self.media_player.pause()
 
-        # 在第一個手動 clip 建立前先保持禁用，避免使用者操作到空 segments
-        self._set_clip_controls_enabled(False)
+        self._populate_clip_list()
+
+        self.current_index = 0
+        self.clip_list.setCurrentRow(0)
+        self._update_ui_for_current_clip()
+
+        self._set_clip_controls_enabled(True)
         self.playback_slider.setEnabled(False)
+
+        self._leave_busy()
 
     def _populate_clip_list(self) -> None:
         self.clip_list.clear()
@@ -573,15 +494,9 @@ class VideoClipperWindow(QMainWindow):
         row = self.clip_list.currentRow()
         if row < 0 or row >= len(self.segments):
             return
-
-        # 切換到任何 clip 一律回到「開始點」模式
-        self.active_target = "start"
-        self._update_active_target_ui()
-
         self.current_index = row
         self._stop_playback()
         self._update_ui_for_current_clip()
-
 
     def on_prev_clip(self) -> None:
         if self.is_busy:
@@ -615,11 +530,8 @@ class VideoClipperWindow(QMainWindow):
         seg = self.segments[self.current_index]
         if self.active_target == "start":
             self._seek_to_sec(seg.start_sec)
-            self._update_playback_slider_from_time(seg.start_sec)  # 新增：藍色跟到綠色
         else:
             self._seek_to_sec(seg.end_sec)
-            self._update_playback_slider_from_time(seg.end_sec)    # 新增：藍色跟到紅色
-
 
     def _update_active_target_ui(self) -> None:
         if self.active_target == "start":
@@ -653,7 +565,6 @@ class VideoClipperWindow(QMainWindow):
             self._seek_to_sec(seg.end_sec)
 
         self._refresh_clip_list_item(self.current_index)
-        self.btn_resume.setEnabled(False)
 
     def _refresh_clip_list_item(self, index: Optional[int] = None) -> None:
         if index is None:
@@ -669,16 +580,6 @@ class VideoClipperWindow(QMainWindow):
 
     # ======== 視窗範圍與滑桿映射 ========
 
-    def _is_current_clip_manual_full_window(self) -> bool:
-        if self.current_index < 0 or self.current_index >= len(self.manual_flags):
-            return False
-        return bool(self.manual_flags[self.current_index])
-
-    def _get_video_duration_sec(self, fallback_sec: float = 1.0) -> float:
-        if self.video_duration_ms > 0:
-            return self.video_duration_ms / 1000.0
-        return max(fallback_sec, 1.0)
-
     def _recompute_window_range(self) -> None:
         if not self.segments or self.current_index < 0:
             self.window_start_sec = 0.0
@@ -686,17 +587,12 @@ class VideoClipperWindow(QMainWindow):
             return
 
         seg = self.segments[self.current_index]
-        duration_sec = self._get_video_duration_sec(fallback_sec=max(seg.end_sec, seg.start_sec + 1.0))
 
-        # 手動新增 clip：整段影片 window
-        if self._is_current_clip_manual_full_window():
-            self.window_start_sec = 0.0
-            self.window_end_sec = duration_sec if duration_sec > 0 else max(seg.end_sec, seg.start_sec + 1.0)
-            if self.window_end_sec <= self.window_start_sec:
-                self.window_end_sec = self.window_start_sec + 1.0
-            return
+        if self.video_duration_ms > 0:
+            duration_sec = self.video_duration_ms / 1000.0
+        else:
+            duration_sec = max(seg.end_sec, seg.start_sec + 1.0)
 
-        # marks clip：保留原本 ±30 秒 window
         ws = max(0.0, seg.start_sec - 30.0)
         we = min(duration_sec, seg.end_sec + 30.0)
 
@@ -709,23 +605,12 @@ class VideoClipperWindow(QMainWindow):
 
     def _update_boundary_sliders(self) -> None:
         if self.window_end_sec <= self.window_start_sec:
-            # self.start_slider.blockSignals(True)
-            # self.end_slider.blockSignals(True)
-            # self.start_slider.setValue(0)
-            # self.end_slider.setValue(SLIDER_MAX)
-            # self.start_slider.blockSignals(False)
-            # self.end_slider.blockSignals(False)
-            self._ignore_slider_events = True
-            try:
-                self.start_slider.blockSignals(True)
-                self.end_slider.blockSignals(True)
-                self.start_slider.setValue(int(start_ratio * SLIDER_MAX))
-                self.end_slider.setValue(int(end_ratio * SLIDER_MAX))
-            finally:
-                self.start_slider.blockSignals(False)
-                self.end_slider.blockSignals(False)
-                self._ignore_slider_events = False
-
+            self.start_slider.blockSignals(True)
+            self.end_slider.blockSignals(True)
+            self.start_slider.setValue(0)
+            self.end_slider.setValue(SLIDER_MAX)
+            self.start_slider.blockSignals(False)
+            self.end_slider.blockSignals(False)
             return
 
         seg = self.segments[self.current_index]
@@ -773,7 +658,7 @@ class VideoClipperWindow(QMainWindow):
     # ======== 滑桿事件（start/end） ========
 
     def on_start_slider_changed(self, value: int) -> None:
-        if self.is_busy or self._ignore_slider_events:
+        if self.is_busy:
             return
         if self.active_target != "start":
             return
@@ -808,7 +693,7 @@ class VideoClipperWindow(QMainWindow):
             self._stop_playback()
 
     def on_end_slider_changed(self, value: int) -> None:
-        if self.is_busy or self._ignore_slider_events:
+        if self.is_busy:
             return
         if self.active_target != "end":
             return
@@ -904,7 +789,6 @@ class VideoClipperWindow(QMainWindow):
         current_sec = pos_ms / 1000.0
         if current_sec >= self.playback_end_sec:
             self._stop_playback()
-            self.btn_resume.setEnabled(False)
 
     # ======== 微調按鈕 ========
 
@@ -963,172 +847,46 @@ class VideoClipperWindow(QMainWindow):
     # ======== 播放器事件 ========
 
     def _on_media_status_changed(self, status) -> None:
+        """媒體狀態改變時的處理：
+        - 當媒體載入完成 (LoadedMedia) 後，把畫面與藍色滑桿拉到目前 clip 的 start。
+        """
         from PySide6.QtMultimedia import QMediaPlayer as _QMP
 
-        if status != _QMP.LoadedMedia:
-            return
-        if self._suppress_loadedmedia_seek:
-            return
-        if not (self.segments and self.current_index >= 0):
-            return
-
-        # 以「最後一次要求 seek 的位置」為準；若沒有才退回目前 clip 的 start
-        target = self._last_seek_target_sec
-        if target is None:
-            target = float(self.segments[self.current_index].start_sec)
-
-        # 避免在 LoadedMedia 裡 seek 又引發新的 LoadedMedia 造成循環
-        self._suppress_loadedmedia_seek = True
-        try:
-            self._seek_to_sec(target)
-            self._update_playback_slider_from_time(target)
-        finally:
-            # 用 singleShot 讓 suppress 在下一個 event loop 才解除，避免同一輪重入
-            QTimer.singleShot(0, lambda: setattr(self, "_suppress_loadedmedia_seek", False))
-
+        if status == _QMP.LoadedMedia:
+            if self.segments and self.current_index >= 0:
+                seg = self.segments[self.current_index]
+                # 媒體真正 ready 之後，再 seek 到 start，這次會確實更新畫面
+                self._seek_to_sec(seg.start_sec)
+                self._update_playback_slider_from_time(seg.start_sec)
 
     def _on_duration_changed(self, duration_ms: int) -> None:
         self.video_duration_ms = duration_ms
-
-        # 無 marks 或 marks 空 clips：等 duration 出來後自動建立第一個手動 clip
-        if self.pending_init_first_manual_clip and self.video_path:
-            if self.video_duration_ms > 0:
-                self.pending_init_first_manual_clip = False
-                self._add_manual_clip(first_clip_if_empty=True, select_new=True)
-                self._set_clip_controls_enabled(True)
-                self.playback_slider.setEnabled(False)
-            return
-
         if self.segments and self.current_index >= 0:
-            # 影片長度一出來，更新 window + 綠/紅滑桿位置（目前 clip）
+            # 影片長度一出來，更新 window + 綠/紅滑桿位置
             self._recompute_window_range()
             self._update_boundary_sliders()
+
+
+
 
     def _on_position_changed(self, position_ms: int) -> None:
         if not self.segments or self.current_index < 0:
             return
 
         sec = position_ms / 1000.0
-        self._update_playback_slider_from_time(sec)
+
+        # 只有在播放中才讓 positionChanged 主導藍色滑桿
+        if self.media_player.playbackState() == QMediaPlayer.PlayingState:
+            self._update_playback_slider_from_time(sec)
 
 
 
-    # ======== 手動新增 clip（append 一個真 segment） ========
-
-    def _next_clip_display_index(self) -> int:
-        """決定新 clip 的 seg.index（顯示用），採目前最大 index + 1。"""
-        if not self.segments:
-            return 1
-        try:
-            return int(max(s.index for s in self.segments)) + 1
-        except Exception:
-            return len(self.segments) + 1
-
-    def _add_manual_clip(self, first_clip_if_empty: bool, select_new: bool) -> None:
-        """append 一個手動 clip 到 segments，並可選擇切換到該 clip。
-        規則：
-          - 若 segments 為空（first_clip_if_empty=True）→ start=0, end=duration
-          - 否則 → start/end 沿用目前選取 clip（若無選取則沿用最後一段）
-          - 手動 clip 視窗範圍為整段影片（透過 manual_flags 控制）
-        """
-        if not self.video_path:
-            return
-
-        duration_sec = self._get_video_duration_sec(fallback_sec=1.0)
-
-        if not self.segments and first_clip_if_empty:
-            start_sec = 0.0
-            end_sec = max(0.0, duration_sec)
-            if end_sec < MIN_GAP_SECONDS:
-                end_sec = MIN_GAP_SECONDS
-        else:
-            ref_seg: Optional[ClipSegment] = None
-            if self.segments and 0 <= self.current_index < len(self.segments):
-                ref_seg = self.segments[self.current_index]
-            elif self.segments:
-                ref_seg = self.segments[-1]
-
-            if ref_seg is None:
-                start_sec = 0.0
-                end_sec = max(0.0, duration_sec)
-                if end_sec < MIN_GAP_SECONDS:
-                    end_sec = MIN_GAP_SECONDS
-            else:
-                start_sec = float(ref_seg.start_sec)
-                end_sec = float(ref_seg.end_sec)
-
-                # 基本保護：避免非法區間
-                if end_sec < start_sec + MIN_GAP_SECONDS:
-                    end_sec = start_sec + MIN_GAP_SECONDS
-                if self.video_duration_ms > 0:
-                    end_sec = min(end_sec, duration_sec)
-
-        new_seg = ClipSegment(
-            index=self._next_clip_display_index(),
-            raw_start_str=self._fmt_time(start_sec),
-            raw_end_str=self._fmt_time(end_sec),
-            aligned_start_sec=start_sec,
-            aligned_end_sec=end_sec,
-            used_keyframe_alignment=False,
-            start_sec=start_sec,
-            end_sec=end_sec,
-        )
-        self.segments.append(new_seg)
-        self.manual_flags.append(True)
-
-        # 左側新增 item
-        text = f"Clip #{new_seg.index}  Start={self._fmt_time(new_seg.start_sec)}  End={self._fmt_time(new_seg.end_sec)}"
-        self.clip_list.addItem(QListWidgetItem(text))
-
-        if select_new:
-            self.clip_list.setCurrentRow(len(self.segments) - 1)
-            # on_clip_selection_changed 會呼叫 _update_ui_for_current_clip
-        else:
-            # 若不切換，也至少保持 list item 正確
-            self._refresh_clip_list_item(len(self.segments) - 1)
-
-    # ======== 匯出 clips / 或新增 clip ========
+    # ======== 匯出 clips ========
 
     def on_export_clicked(self) -> None:
         if self.is_busy:
             return
-        if not self.video_path:
-            return
-
-        # 先問是否要新增 clip（不論有無 marks）
-        ret_add = QMessageBox.question(
-            self,
-            "新增 clip",
-            "要新增一個 clip 讓你手動調整嗎？\n\n"
-            "選「是」：新增一段 clip（視窗為整段影片）\n"
-            "選「否」：進入輸出流程",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-
-        if ret_add == QMessageBox.Yes:
-            # 新增 clip：若目前完全沒有 clip（可能是影片還在載入 duration），先保護
-            if self.video_duration_ms <= 0 and not self.segments:
-                QMessageBox.information(
-                    self,
-                    "影片尚未就緒",
-                    "影片長度尚未讀取完成，請稍候再按一次「開始輸出所有 clips」。",
-                )
-                return
-
-            # 沿用目前 clip 的 start/end；若沒有任何 clip，則用頭尾
-            first_if_empty = (len(self.segments) == 0)
-            self._add_manual_clip(first_clip_if_empty=first_if_empty, select_new=True)
-            self._set_clip_controls_enabled(True)
-            self.playback_slider.setEnabled(False)
-            return
-
-        if ret_add != QMessageBox.No:
-            return
-
-        # 不新增 → 走原版輸出流程
-        if not self.segments:
-            QMessageBox.information(self, "沒有 clips", "目前沒有任何 clips 可輸出。")
+        if not self.segments or not self.video_path:
             return
 
         out_dir = os.path.dirname(os.path.abspath(self.video_path))
@@ -1179,16 +937,8 @@ class VideoClipperWindow(QMainWindow):
     def _seek_to_sec(self, sec: float) -> None:
         if sec < 0:
             sec = 0.0
-
-        self._last_seek_target_sec = float(sec)
         pos_ms = int(sec * 1000)
         self.media_player.setPosition(pos_ms)
-
-
-
-
-
-
 
 
 def main() -> None:
