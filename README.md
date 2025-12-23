@@ -37,7 +37,7 @@ Each pair of lines represents one clip segment.
 After watching the video, you open the GUI to load the video file and its `.marks` file.  
 The GUI displays all detected segments, allows optional fine adjustments using sliders and buttons, and finally exports all clips at once.
 
-If no `.marks` file is found, the GUI switches to manual mode, allowing fully manual clip creation and adjustment.
+If a corresponding `.marks` file **can not be found**, the GUI switches to manual mode, allowing fully manual clip creation and adjustment.
 
 ---
 
@@ -46,11 +46,11 @@ If no `.marks` file is found, the GUI switches to manual mode, allowing fully ma
 VideoClipper provides pre-built Windows executables.  
 Users do not need Python or any development dependencies.
 
-Simply download the release package and follow the usage instructions below.
+Simply download the latest release package and follow the usage instructions below.
 
-### Folder Structure (Release v0.2.0)
+### Folder Structure (Release)
 
-After downloading Release v0.2.0, prepare the files in the following structure:
+After downloading the latest **Release**, prepare the files in the following structure:
 
 ```
 VideoClipper/
@@ -59,18 +59,20 @@ VideoClipper/
    └─ gui_app.exe
 ```
 
-Then run:
-
-```
-VideoClipper/dist/background_marker.exe
-VideoClipper/dist/gui_app.exe
-```
-
 ---
 
 ## Usage Workflow
 
-VideoClipper follows a simple two-step process:
+VideoClipper follows a simple workflow from marking to exporting.
+
+### Step 0. Install and configure PotPlayer
+
+Install PotPlayer if it is not already installed.
+
+In PotPlayer settings, configure the **middle mouse button** to be available for use as a global hotkey during playback.  
+This middle mouse button will be used by VideoClipper to record clip boundaries.
+
+---
 
 ### Step 1. Start the background marker (optional)
 
@@ -119,7 +121,7 @@ Contents:
 
 ### Step 3. Load and export clips in the GUI
 
-Before opening the GUI, make sure the video file and its `.marks` file are located in the same folder.
+Before opening the GUI, make sure the video file is located in the same folder as its `.marks` file (if available).
 
 Run:
 
@@ -131,44 +133,49 @@ In the GUI:
 
 ![VideoClipper GUI](./README_img/gui.png)
 
-- Click **「選擇影片檔案...」** and choose the video you watched.
-- After processing, all segments (Clip #1, Clip #2, …) will appear in the left sidebar.
-- You may fine-tune each segment using:
-  - Click **「目前正在調整: 開始點」 / 「目前正在調整: 結束點」** to select which point to adjust.
-  - Green slider: start position
-  - Red slider: end position
-  - Blue slider: seek within the preview
-  - ±1s and ±0.1s buttons for precise adjustments
+- Click **「選擇影片檔案...」** and choose the target video.
+- After processing, all segments will appear in the left sidebar as:
+  - `Clip #1`, `Clip #2`, …
+- You may:
+  - **Play** the current clip
+  - **Continue playback** seamlessly across the clip boundary
+  - Fine-tune each segment using:
+    - **「目前正在調整: 開始點 / 結束點」** to select which point to adjust
+    - Green slider: start position
+    - Red slider: end position
+    - Blue slider: seek within the preview
+    - ±1s and ±0.1s buttons for precise adjustments
 
 If you do not wish to adjust anything, you may export directly.
 
 ---
 
-## Manual Mode (No `.marks`)
+## Manual Mode
 
-If the selected video does not have a corresponding `.marks` file:
-
-- The GUI automatically enters manual mode
-- A default clip is created:
-  - Start = beginning of the video
-  - End = end of the video
-- The entire video duration is used as the adjustment window
+If a corresponding `.marks` file **can not be found**, the GUI automatically enters manual mode.
 
 In manual mode, you can:
 
 - Adjust the start and end boundaries freely
-- Add additional clips manually
 - Export clips in the same way as marked clips
+
+Regardless of whether a `.marks` file exists, you may **manually add new clips at any time**.
+
+## Add a new clip
+To add a new clip manually:
+
+- Click the **Add Clip** button at the bottom-right corner of the GUI
+- The GUI will prompt you to confirm the creation of a new clip
+- A new clip will be created, and can then be adjusted similarly
 
 ---
 
 ## Output Location
 
-All exported clips are placed **in the same folder as the video and its `.marks` file**, for example:
+All exported clips are placed in the same folder as the original video file, for example:
 
 ```
 ~/MyVideo.mp4
-~/MyVideo.marks
 ~/clip_001.mp4
 ~/clip_002.mp4
 ...
@@ -180,19 +187,33 @@ All exported clips are placed **in the same folder as the video and its `.marks`
 
 To build the executables manually:
 
-1. Place `ffmpeg.exe` back into:
+### Prepare ffmpeg
+
+Download ffmpeg from the official website:
+
+```
+https://ffmpeg.org/download.html
+```
+
+Download the **ffmpeg-git-full.7z** and unzip.
+
+After extracting the archive, place `bin/ffmpeg.exe` at the following path in the repository:
 
 ```
 bin/ffmpeg.exe
 ```
 
-2. Build the background marker:
+---
+
+### Build executables
+
+1. Build the background marker:
 
 ```
 pyinstaller --onefile .\run_background_marker.py
 ```
 
-3. Build the GUI application:
+2. Build the GUI application:
 
 ```
 pyinstaller --onefile --clean --add-binary "bin\ffmpeg.exe;bin" .\run_gui_app.py
@@ -210,6 +231,5 @@ run_gui_app.exe
 ## Important Notes
 
 - The background marker only records timestamps when PotPlayer is the foreground window.
-- The video file and its `.marks` file **must** be in the same folder before loading in the GUI.
 - Segment marking has no undo function; each middle-mouse press is permanently recorded.
 - Nested segments (a clip inside another clip) are not supported.
