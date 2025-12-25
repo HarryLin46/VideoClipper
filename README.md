@@ -141,9 +141,16 @@ In the GUI:
 - After processing, all segments will appear in the left sidebar as:
   - `Clip #1`, `Clip #2`, …
 
-- You may use the following playback controls to review each clip:
+- You may fine-tune each segment using:
 
-   #### Play button behavior
+   - **「目前正在調整: 開始點 / 結束點」** to select which point to adjust
+   - Green slider: start position  
+   - Red slider: end position  
+   - ±1s and ±0.1s buttons for precise adjustments
+   - 
+- You may also use the following playback controls to review each clip:
+
+  #### Play button behavior
    
    - If **「目前正在調整: 開始點」**, pressing **「播放/暫停」** starts playback from the **clip start position**.
    - If **「目前正在調整: 結束點」**, pressing **「播放/暫停」** starts playback from **approximately 3 seconds before the clip end**.
@@ -156,12 +163,7 @@ In the GUI:
    
    - After playback starts, you can use the blue slider to adjust the **current playback position**.
 
-- You may also fine-tune each segment using:
 
-   - **「目前正在調整: 開始點 / 結束點」** to select which point to adjust
-   - Green slider: start position  
-   - Red slider: end position  
-   - ±1s and ±0.1s buttons for precise adjustments  
 
 If you do not wish to adjust anything, you may export directly.
 
