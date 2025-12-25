@@ -67,10 +67,14 @@ VideoClipper follows a simple workflow from marking to exporting.
 
 ### Step 0. Install and configure PotPlayer
 
-Install PotPlayer if it is not already installed.
+- Install PotPlayer if it is not already installed.
 
-In PotPlayer settings, configure the **middle mouse button** to be available for use as a global hotkey during playback.  
-This middle mouse button will be used by VideoClipper to record clip boundaries.
+- Configure the middle mouse button in PotPlayer:
+   1. Open PotPlayer and press `F5` to open **偏好設定**.
+   2. Navigate to **一般 → 鍵盤**.
+   3. Click **新增** to create a new hotkey.
+   4. Click the shortcut input field, then press the **滑鼠中鍵** to assign it.
+   5. For the action, select: **其他 → 複製目前播放時間到剪貼簿**.  
 
 ---
 
@@ -88,12 +92,12 @@ Keep it running in the background.
 
 ### Step 2. Watch and mark in PotPlayer (optional)
 
-Play the video in PotPlayer.
+- Play the video in PotPlayer.
 
-Whenever you want to mark a segment:
+- Whenever you want to mark a segment:
 
-- Press the middle mouse button slightly **before** the segment begins → records a `start`
-- Press the middle mouse button slightly **after** the segment ends → records an `end`
+   - Press the middle mouse button slightly **before** the segment begins → records a `start`
+   - Press the middle mouse button slightly **after** the segment ends → records an `end`
 
 A `.marks` file will be created automatically in:
 
@@ -131,20 +135,33 @@ VideoClipper/dist/gui_app.exe
 
 In the GUI:
 
-![VideoClipper GUI](./README_img/gui.png)
+![VideoClipper GUI](./README_img/gui_v2.png)
 
 - Click **「選擇影片檔案...」** and choose the target video.
 - After processing, all segments will appear in the left sidebar as:
   - `Clip #1`, `Clip #2`, …
-- You may:
-  - **Play** the current clip
-  - **Continue playback** seamlessly across the clip boundary
-  - Fine-tune each segment using:
-    - **「目前正在調整: 開始點 / 結束點」** to select which point to adjust
-    - Green slider: start position
-    - Red slider: end position
-    - Blue slider: seek within the preview
-    - ±1s and ±0.1s buttons for precise adjustments
+
+- You may use the following playback controls to review each clip:
+
+   #### Play button behavior
+   
+   - If **「目前正在調整: 開始點」**, pressing **「播放/暫停」** starts playback from the **clip start position**.
+   - If **「目前正在調整: 結束點」**, pressing **「播放/暫停」** starts playback from **approximately 3 seconds before the clip end**.
+   
+   #### Continue Playback
+   
+   - Pressing **「接續播放/暫停」** resumes video playback from the **current playback position**.
+   
+   #### Blue seek slider
+   
+   - After playback starts, you can use the blue slider to adjust the **current playback position**.
+
+- You may also fine-tune each segment using:
+
+   - **「目前正在調整: 開始點 / 結束點」** to select which point to adjust
+   - Green slider: start position  
+   - Red slider: end position  
+   - ±1s and ±0.1s buttons for precise adjustments  
 
 If you do not wish to adjust anything, you may export directly.
 
@@ -161,12 +178,13 @@ In manual mode, you can:
 
 Regardless of whether a `.marks` file exists, you may **manually add new clips at any time**.
 
-## Add a new clip
+### Add a new clip
+
 To add a new clip manually:
 
 - Click the **Add Clip** button at the bottom-right corner of the GUI
 - The GUI will prompt you to confirm the creation of a new clip
-- A new clip will be created, and can then be adjusted similarly
+- A new clip will be created and can then be adjusted in the same way as other clips
 
 ---
 
@@ -197,7 +215,7 @@ https://ffmpeg.org/download.html
 
 Download the **ffmpeg-git-full.7z** and unzip.
 
-After extracting the archive, place `bin/ffmpeg.exe` at the following path in the repository:
+After extracting the archive, copy `ffmpeg.exe` to the following location in the repository:
 
 ```
 bin/ffmpeg.exe
