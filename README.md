@@ -1,3 +1,5 @@
+English | [繁體中文](README.zh-TW.md)
+
 # VideoClipper
 
 VideoClipper is a lightweight tool that lets you mark video clips while watching in PotPlayer, then review and export all clips through a simple GUI.  
