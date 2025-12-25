@@ -186,7 +186,7 @@ Regardless of whether a `.marks` file exists, you may **manually add new clips a
 
 To add a new clip manually:
 
-- Click the **Add Clip** button at the bottom-right corner of the GUI
+- Click the **開始輸出所有clips** button at the bottom-right corner of the GUI
 - The GUI will prompt you to confirm the creation of a new clip
 - A new clip will be created and can then be adjusted in the same way as other clips
 
