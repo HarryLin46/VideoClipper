@@ -255,3 +255,4 @@ run_gui_app.exe
 - The background marker only records timestamps when PotPlayer is the foreground window.
 - Segment marking has no undo function; each middle-mouse press is permanently recorded.
 - Nested segments (a clip inside another clip) are not supported.
+- Occasionally, the UI may become unresponsive for unknown reasons. If this occurs, please close and restart the application.
